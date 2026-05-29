@@ -1,6 +1,6 @@
-# WordPress Playground PR Preview
+# WordPress Playground PR Preview Action
 
-Add a **Preview in WordPress Playground** button to every pull request — so reviewers can try your plugin or theme in a real WordPress instance, in their browser, with one click.
+Add a **Preview in WordPress Playground** button to pull requests for WordPress plugins and themes. Reviewers can open the pull request in a browser-based WordPress instance and test the changes with one click.
 
 <p align="center">
   <img src="assets/playground-preview-button.svg" alt="Preview in WordPress Playground" width="220">
@@ -17,9 +17,9 @@ Add a **Preview in WordPress Playground** button to every pull request — so re
   <a href="#troubleshooting">troubleshooting</a>
 </p>
 
-> **Heads up:** v3 keeps the direct no-build action inputs, and adds fork-safe reusable workflows for built previews. See [Migrating from older usage](#migrating-from-older-usage) for what changed; the old v2 docs are in the [pre-v3 README](https://github.com/WordPress/action-wp-playground-pr-preview/blob/c860752/README.md).
+> **Using v3?** v3 supports two setup paths: direct action inputs for plugins and themes that do not need a build step, and reusable build/publish workflows for previews that need Composer, npm, Vite, or other build output. See [Migrating from older usage](#migrating-from-older-usage) for what changed from older examples.
 
-Start with **[Quick start](#quick-start)** and pick the variant that matches your repo: no build step, or a build step that needs Composer/npm/Vite output before Playground can run it.
+Start with **[Quick start](#quick-start)** and choose the path that matches your repository.
 
 ---
 
@@ -44,7 +44,7 @@ Start with **[Quick start](#quick-start)** and pick the variant that matches you
 
 ### No build step
 
-Your plugin or theme runs as-is from a clone of the repo (no Composer, no npm, no asset pipeline). Drop **one** workflow file in your repo:
+Use this setup when your plugin or theme can run directly from the repository, with no Composer install, npm build, or asset pipeline. Create one workflow file:
 
 ```yaml
 # .github/workflows/pr-preview.yml
@@ -66,15 +66,15 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-Open a PR. The action edits the description with a Preview button. Click it; Playground fetches your plugin from GitHub and boots WordPress with it activated.
+Open a pull request. The action adds a Preview button to the pull request description. When someone clicks it, Playground fetches the plugin or theme from GitHub and boots WordPress with it activated.
 
-That's it. No artifact hosting, no second workflow.
+This direct setup does not run a build command or publish a ZIP artifact; Playground loads the files from GitHub at the pull request ref.
 
 > **Fork PR note:** this direct one-workflow setup is simplest for same-repository PRs. Public fork PRs usually receive a read-only `GITHUB_TOKEN`, so the action may be unable to edit the PR description. If fork contributors need working previews, use the two-workflow build/publish setup below even when the build command is just a small zip step.
 
 ### With a build step
 
-Your plugin or theme needs `composer install`, `npm run build`, or similar before it works. Two workflow files:
+Use this setup when the preview needs generated files, such as Composer dependencies, npm/Vite bundles, or another build output. Create two workflow files: one to build a ZIP artifact and one to publish a Preview button after the build succeeds.
 
 ```yaml
 # .github/workflows/pr-preview-build.yml
@@ -116,9 +116,9 @@ jobs:
       kind: plugin            # or: kind: theme
 ```
 
-Open a PR. The build workflow runs `npm ci && npm run build:plugin-zip`, the publish workflow uploads the resulting zip to a public release URL and posts the Preview button. Click it; Playground installs your *built* plugin and activates it.
+Open a pull request. The build workflow runs `npm ci && npm run build:plugin-zip`. After that succeeds, the publish workflow uploads the resulting ZIP to a public release URL and posts the Preview button. When someone clicks it, Playground installs and activates the built plugin.
 
-> **Why two files?** `pull_request` events run with read-only permissions (so PRs from forks are safe). Posting a comment and uploading to a release needs write permissions, which only `workflow_run` can grant safely. The split is a GitHub trigger-permission constraint; see [How it works](#how-it-works).
+> **Why two workflow files?** The build workflow runs untrusted pull request code with read-only permissions. The publish workflow runs later, from the trusted default-branch workflow, with the write permissions needed to upload release assets and update the pull request. See [How it works](#how-it-works).
 
 ---
 
@@ -137,7 +137,7 @@ Each link is a real, public repo running these workflows. Each PR has a working 
 
 ## Recipes
 
-Pick the one that matches your repo. Copy-paste, edit the obvious bits, ship.
+Pick the recipe that matches your repository, then adjust the paths, commands, and artifact names for your project.
 
 ### Plugin in a subdirectory
 
@@ -436,14 +436,14 @@ Available template variables are listed under [Reference → Template variables]
 
 ### Mental model
 
-Playground runs WordPress entirely in the browser via WebAssembly. Anything Playground needs to install — a plugin zip, a theme zip, a WXR file — must be reachable via a public URL at click-time. This action's only job is to **build the right Blueprint and put a button to it on your PR**.
+Playground runs WordPress entirely in the browser via WebAssembly. Anything Playground needs to install — a plugin ZIP, a theme ZIP, a WXR file — must be reachable through a public URL when the button is clicked. This action builds the right Blueprint and publishes a button to that Blueprint on the pull request.
 
-Two kinds of public URL work:
+The action uses one of two public URL strategies:
 
-1. **`git:directory`** — Playground fetches your repo at a specific ref directly from GitHub. No CI artifact hosting needed. Fast to set up but doesn't run any build step.
-2. **A release-asset URL** — your CI builds a zip and uploads it to a release in your repo. Required when `composer install` / `npm run build` / asset compilation is needed for your plugin to actually work.
+1. **`git:directory`** — Playground fetches the repository at a specific ref directly from GitHub. This is the direct no-build setup.
+2. **A release-asset URL** — CI builds a ZIP and uploads it to a release in the repository. Use this when the preview needs Composer dependencies, npm output, compiled assets, or any other generated files.
 
-The action handles (1) directly. The two reusable workflows handle (2) end-to-end: they run your build, upload the result to a `ci-artifacts` prerelease, and call the action with a Blueprint pointing at the resulting URL.
+The direct action inputs handle the `git:directory` path. The two reusable workflows handle the release-asset path end to end: they run the build, upload the result to a `ci-artifacts` prerelease, and call the action with a Blueprint that points at the resulting URL.
 
 ### Fork safety model (build path only)
 
@@ -487,7 +487,7 @@ action behavior.
 | Posting the Preview button on the PR | Publish workflow → action | Trusted |
 | Clicking the button → Playground in the user's browser | The user's browser | Untrusted code, but iframe-isolated by Playground |
 
-Translation: the action does not require any trust in PR code. The zip is treated as opaque bytes everywhere except inside the Playground iframe, where the WebAssembly sandbox is the actual mitigation.
+In other words, the publish workflow does not execute pull request code. It treats the ZIP as data until a reviewer opens it in the Playground iframe, where WordPress runs inside Playground's browser sandbox.
 
 For public repositories, release assets are public. A fork PR can therefore
 cause its built zip to be hosted on the repository's `ci-artifacts` prerelease
@@ -574,7 +574,7 @@ permissions:
   pull-requests: write
 ```
 
-Without these, the run fails at startup with no logs (a hard-to-diagnose GitHub default). See [Troubleshooting](#troubleshooting).
+Without these, GitHub may fail the run at startup before the job logs are available. See [Troubleshooting](#troubleshooting).
 
 ### Template variables
 
@@ -610,7 +610,7 @@ All variables except `PLAYGROUND_BUTTON` are HTML-escaped before substitution.
 - **The `ci-artifacts` release is shared across all PRs.** Each PR's zips are unique (`pr-<N>-<SHA>-<name>.zip`); cleanup keeps the N most recent commit-sets per PR.
 - **`artifacts-to-keep` must be a positive integer or `keep-all`.** `0`, negative numbers, and arbitrary strings fail before any release assets are uploaded.
 - **`workflow_run`-triggered workflows always read their YAML from the default branch.** Workflow changes on a PR branch don't take effect until merged. Test publish-side changes on a scratch repo first.
-- **Private repos won't work.** Playground runs in the user's browser and needs unauthenticated download URLs. `git:directory` and release assets in private repos both require auth Playground doesn't have. Make the repo public or self-host the zip.
+- **Private repositories are not supported by the default setup.** Playground runs in the user's browser and needs unauthenticated download URLs. `git:directory` and release assets in private repositories both require authentication that Playground does not have. Make the repository public or self-host the ZIP.
 
 ---
 
@@ -636,11 +636,11 @@ jobs:
 
 ### The Preview button 404s when clicked
 
-Either the artifact wasn't uploaded, or the release is a draft (auth-protected). Check the `ci-artifacts` release in your repo's Releases page. If it's a draft, flip it to a prerelease — the action does this automatically for new releases but won't change an existing draft.
+Either the artifact was not uploaded, or the release is a draft and requires authentication. Check the `ci-artifacts` release in the repository's Releases page. If it is a draft, convert it to a prerelease. The action does this automatically for new releases, but it does not change an existing draft release.
 
 ### My plugin needs `composer install` or `npm run build` and shows up empty
 
-You're using `plugin-path:` on the action directly, which uses `git:directory` and ships your repo at HEAD with no build step. Switch to the [build-step setup](#with-a-build-step) — `composer install` and `npm ci` need to run in CI before zipping.
+The workflow is probably using `plugin-path:` on the action directly. That path uses `git:directory`, so Playground receives the repository files without running a build step. Switch to the [build-step setup](#with-a-build-step) so `composer install`, `npm ci`, or other build commands run in CI before zipping.
 
 ### `git diff origin/$GITHUB_BASE_REF...HEAD` fails with "no merge base"
 
@@ -672,15 +672,15 @@ That's `restore-button-if-removed: true` (the default). Either set it to `false`
 
 ## Migrating from older usage
 
-The common pre-v3 advanced pattern asked you to maintain ~107 lines of YAML across two workflow files (hand-rolled `actions/github-script` for parsing artifact metadata, hand-rolled `node` heredoc for building the Blueprint, plus a manual one-time UI step to publish a draft release). All of that is now internal to the reusable workflows. If you used less-common `expose-artifact-on-public-url` inputs such as `artifact-source-repository`, `release-repository`, `create-release-if-missing`, or `cleanup-enabled`, keep using the legacy helper or wrap the reusable workflow until v3 grows those knobs.
+The common pre-v3 advanced pattern required a long custom YAML setup across two workflow files: GitHub Script for parsing artifact metadata, a Node heredoc for building the Blueprint, and a manual one-time step to publish a draft release. The reusable workflows now handle those details. If you used less-common `expose-artifact-on-public-url` inputs such as `artifact-source-repository`, `release-repository`, `create-release-if-missing`, or `cleanup-enabled`, keep using the legacy helper or wrap the reusable workflow until v3 supports those options.
 
 To migrate:
 
 1. **Replace your build workflow.** Move whatever it ran (`composer install`, `npm ci`, etc.) into the `build-command:` input of `preview-build.yml@v3`. Replace `actions/upload-artifact@v4` with `name=path` lines in `artifacts:`.
 2. **Replace your publish workflow.** Pick a [blueprint mode](#reusable-workflow-preview-publishymlv3): `kind:` for a single zip, `blueprint:` for fixed shapes, `blueprint-from-artifact:` for per-PR shapes. Add the `permissions:` block on both the workflow and the calling job.
-3. **One-time:** if you have an existing `ci-artifacts` draft release, either delete it (the next run creates a fresh prerelease automatically) or flip it from draft → prerelease in the Releases UI. Without this, Playground continues to silently 404 on existing assets.
+3. **One-time:** if you have an existing `ci-artifacts` draft release, either delete it (the next run creates a fresh prerelease automatically) or convert it from draft to prerelease in the Releases UI. Draft release assets require authentication, so Playground cannot download them.
 
-Old README content (covering the manually-orchestrated pattern, plus the legacy github-proxy.com URL scheme that this action's blueprints used to rewrite from) is preserved in this repo's git history — `git log -- README.md` then check out any pre-v3 commit, or browse the file at that commit on GitHub.
+Older README content is preserved in git history. Use `git log -- README.md`, then check out or browse a pre-v3 commit if you need the manually orchestrated artifact pattern or the legacy `github-proxy.com` URL scheme.
 
 ---
 
