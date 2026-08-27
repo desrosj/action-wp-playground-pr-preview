@@ -218,3 +218,114 @@ describe('comment mode', () => {
     expect(updatedPrBody.body).toContain('Some intro text.');
   });
 });
+
+describe('append-to-description mode', () => {
+  it('inserts the managed block into an empty PR description', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'append-to-description',
+      'plugin-path': 'my-plugin',
+      'restore-button-if-removed': 'true',
+    });
+
+    let updatedBody;
+    githubApi
+      .intercept({
+        path: '/repos/acme/my-plugin/pulls/42',
+        method: 'PATCH',
+        body: (body) => {
+          updatedBody = JSON.parse(body);
+          return true;
+        },
+      })
+      .reply(200, {});
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(updatedBody.body.startsWith('<!-- wp-playground-preview:start -->')).toBe(true);
+    expect(updatedBody.body).toContain('<!-- wp-playground-preview:end -->');
+  });
+
+  it('replaces stale managed content while preserving surrounding text', async () => {
+    // The old content must itself look like a button (an "<a " tag whose
+    // content mentions "playground") or performDescriptionUpdate treats it
+    // as a user placeholder and skips the update instead of replacing it —
+    // see the looksLikeButton check in src/description.js (Task 10).
+    const prWithStaleBlock = {
+      ...BASE_PULL_REQUEST,
+      body:
+        'Intro.\n\n<!-- wp-playground-preview:start -->\n' +
+        '<a href="https://playground.wordpress.net/#OLD_BLUEPRINT" target="_blank">old</a>\n' +
+        '<!-- wp-playground-preview:end -->\n\nOutro.',
+    };
+    harness.setEventPayload({ pull_request: prWithStaleBlock, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'append-to-description',
+      'plugin-path': 'my-plugin',
+      'restore-button-if-removed': 'true',
+    });
+
+    let updatedBody;
+    githubApi
+      .intercept({
+        path: '/repos/acme/my-plugin/pulls/42',
+        method: 'PATCH',
+        body: (body) => {
+          updatedBody = JSON.parse(body);
+          return true;
+        },
+      })
+      .reply(200, {});
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(updatedBody.body).toContain('Intro.');
+    expect(updatedBody.body).toContain('Outro.');
+    expect(updatedBody.body).not.toContain('OLD_BLUEPRINT');
+  });
+
+  it('does not call pulls.update when the description is already up to date', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'append-to-description',
+      'plugin-path': 'my-plugin',
+      'restore-button-if-removed': 'true',
+    });
+    let renderedBody;
+    githubApi
+      .intercept({
+        path: '/repos/acme/my-plugin/pulls/42',
+        method: 'PATCH',
+        body: (body) => {
+          renderedBody = JSON.parse(body).body;
+          return true;
+        },
+      })
+      .reply(200, {});
+    await harness.runAction();
+
+    githubApi = harness.resetHarness();
+    // Re-require after this mid-test reset — see the identical comment in
+    // Task 2's "does not call updateComment when already matching" test for
+    // why this is required and what silently breaks without it.
+    core = require('@actions/core');
+    const prAlreadyUpToDate = { ...BASE_PULL_REQUEST, body: renderedBody };
+    harness.setEventPayload({ pull_request: prAlreadyUpToDate, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'append-to-description',
+      'plugin-path': 'my-plugin',
+      'restore-button-if-removed': 'true',
+    });
+    // No PATCH interceptor registered — a real call attempt fails loudly.
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+  });
+});
