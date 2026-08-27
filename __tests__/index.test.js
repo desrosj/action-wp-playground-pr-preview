@@ -156,6 +156,14 @@ describe('comment mode', () => {
     // unexpected call would throw and be caught by the action's own
     // error handler, surfacing as setFailed.
     githubApi = harness.resetHarness();
+    // Re-require after this mid-test reset, same reason as the top-of-file
+    // beforeEach: resetHarness() calls jest.resetModules(), so the `core`
+    // captured in beforeEach (before this second reset) is now a stale mock
+    // instance the upcoming runAction() call's fresh src/index.js won't
+    // write to — expect(core.setFailed)... below would silently check a
+    // mock nothing can ever call, always passing regardless of what the
+    // action actually does.
+    core = require('@actions/core');
     harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
     harness.setInputs({
       'github-token': 'test-token',
