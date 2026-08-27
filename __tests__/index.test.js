@@ -5,7 +5,6 @@ jest.mock('@actions/core', () => {
   return { ...actual, setOutput: jest.fn(), setFailed: jest.fn() };
 });
 
-const core = require('@actions/core');
 const harness = require('./helpers/harness');
 const fixtures = require('./fixtures/github-responses');
 
@@ -24,9 +23,18 @@ const BASE_REPOSITORY = {
 };
 
 let githubApi;
+let core;
 
 beforeEach(() => {
   githubApi = harness.resetHarness();
+  // Required AFTER resetHarness() (which calls jest.resetModules()), not at
+  // this file's top level. A top-level require here would capture a mock
+  // instance from a module generation that no longer exists by the time
+  // runAction() requires a fresh src/index.js — which would get a brand-new
+  // mock generation instead, with its own separate jest.fn() instances that
+  // this file's assertions would never see (same class of bug as requiring
+  // `undici` at harness.js's top level — see that file's resetHarness()).
+  core = require('@actions/core');
 });
 
 describe('comment mode', () => {
