@@ -3,12 +3,50 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { MockAgent, setGlobalDispatcher } = require('undici');
 
 const ORIGINAL_ENV = { ...process.env };
 
 let mockAgent;
 let eventFilePath;
+
+/**
+ * Wraps a MockPool so every interceptor a test declares:
+ *  - matches a plain string `path` regardless of an appended query string.
+ *    Octokit's `github.paginate()` appends `?per_page=100` to the
+ *    listComments request, and undici's plain-string path matcher requires
+ *    an exact match — it does NOT ignore an unexpected query string, so
+ *    without this every paginated GET call fails to match and the mocked
+ *    request hangs until the harness's timeout.
+ *  - gets a `content-type: application/json` response header automatically.
+ *    `MockPool.reply()` does not set one itself, and without it Octokit's
+ *    fetch wrapper returns the raw response text instead of parsed JSON —
+ *    `response.data` ends up being the *string* `"[]"` instead of an
+ *    array, and code like `"total_count" in response.data` (inside
+ *    @octokit/plugin-paginate-rest) throws a TypeError on a primitive.
+ *
+ * Both fixes live here, once, so no individual test has to remember either
+ * quirk — every `pool.intercept({ path: '...' }).reply(status, data)` call
+ * written elsewhere in this plan works exactly as written.
+ */
+function wrapPool(pool) {
+  const originalIntercept = pool.intercept.bind(pool);
+  pool.intercept = (opts) => {
+    const matchOpts = { ...opts };
+    if (typeof matchOpts.path === 'string') {
+      const exact = matchOpts.path;
+      matchOpts.path = (requestPath) => requestPath === exact || requestPath.startsWith(`${exact}?`);
+    }
+    const interceptor = originalIntercept(matchOpts);
+    const originalReply = interceptor.reply.bind(interceptor);
+    interceptor.reply = (statusCode, data, responseOptions = {}) =>
+      originalReply(statusCode, data, {
+        ...responseOptions,
+        headers: { 'content-type': 'application/json', ...responseOptions.headers },
+      });
+    return interceptor;
+  };
+  return pool;
+}
 
 /**
  * Resets modules, environment variables, and the mocked GitHub API before
@@ -28,11 +66,20 @@ function resetHarness() {
   }
   eventFilePath = undefined;
 
+  // Required AFTER jest.resetModules(), not at this file's top level.
+  // resetModules() clears Jest's per-test-file module registry, so the
+  // next require('undici') anywhere (including @actions/github's own
+  // internal require when runAction() requires src/index.js fresh) gets a
+  // module instance from the same post-reset registry generation. This
+  // matters less than the two fixes above, but keeps the dispatcher setup
+  // and the module src/index.js actually uses unambiguously in sync.
+  const { MockAgent, setGlobalDispatcher } = require('undici');
+
   mockAgent = new MockAgent();
   mockAgent.disableNetConnect();
   setGlobalDispatcher(mockAgent);
 
-  return mockAgent.get('https://api.github.com');
+  return wrapPool(mockAgent.get('https://api.github.com'));
 }
 
 /**
