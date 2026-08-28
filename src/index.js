@@ -2,6 +2,8 @@ const core = require('@actions/core');
 const githubLib = require('@actions/github');
 const { mergeVariables, substitute } = require('./templates');
 const { normalizePath, sanitizeSlug, inferSlug, buildAutoBlueprint } = require('./blueprint');
+const { performDescriptionUpdate, removeManagedDescriptionBlock } = require('./description');
+const { performCommentUpdate } = require('./comment');
 
 (async () => {
   const context = githubLib.context;
@@ -76,8 +78,6 @@ const { normalizePath, sanitizeSlug, inferSlug, buildAutoBlueprint } = require('
 
   const descriptionTemplateInput = core.getInput('description-template', {required: false}) || '';
   const commentTemplateInput = core.getInput('comment-template', {required: false}) || '';
-  const descriptionMarkerStart = '<!-- wp-playground-preview:start -->';
-  const descriptionMarkerEnd = '<!-- wp-playground-preview:end -->';
   const commentIdentifier = '<!-- wp-playground-preview-comment -->';
   const restoreButtonIfRemoved = core.getInput('restore-button-if-removed', {required: false}) !== 'false';
 
@@ -189,120 +189,23 @@ const { normalizePath, sanitizeSlug, inferSlug, buildAutoBlueprint } = require('
   const renderedDescription = substitute(descriptionTemplate, templateVariables);
   const renderedComment = substitute(commentTemplate, templateVariables);
 
-  const performDescriptionUpdate = async () => {
-    const currentBody = pr.body || '';
-    const managedBlock = `${descriptionMarkerStart}${String.fromCodePoint(10)}${renderedDescription.trim()}${String.fromCodePoint(10)}${descriptionMarkerEnd}`;
-    let nextBody;
-
-    if (currentBody.includes(descriptionMarkerStart) && currentBody.includes(descriptionMarkerEnd)) {
-  	// Markers exist - check if there's a user placeholder
-  	const pattern = new RegExp(
-  	  `${descriptionMarkerStart}([\\s\\S]*?)${descriptionMarkerEnd}`,
-  	  'm'
-  	);
-  	const match = currentBody.match(pattern);
-  	if (match) {
-  	  const existingContent = match[1].trim();
-  	  // If content exists but doesn't contain typical button HTML, assume it's a user placeholder
-  	  const looksLikeButton = existingContent.includes('<a ') && existingContent.includes('playground');
-  	  if (existingContent && !looksLikeButton) {
-  		core.info('User placeholder detected between markers. Skipping update to respect user preference.');
-  		return;
-  	  }
-  	}
-  	// Update existing button
-  	nextBody = currentBody.replace(pattern, managedBlock);
-    } else {
-  	// Markers don't exist - check if we should restore
-  	if (!restoreButtonIfRemoved) {
-  	  core.info('Button markers not found and restore-button-if-removed is false. Skipping to respect user removal.');
-  	  return;
-  	}
-  	// Add the button
-  	const trimmed = currentBody.trimEnd();
-  	nextBody = trimmed ? `${trimmed}${String.fromCodePoint(10)}${String.fromCodePoint(10)}${managedBlock}` : managedBlock;
-    }
-
-    if (nextBody !== currentBody) {
-  	await github.rest.pulls.update({
-  	  owner,
-  	  repo: repoName,
-  	  pull_number: prNumber,
-  	  body: nextBody
-  	});
-  	core.info('PR description updated with Playground preview button.');
-    } else {
-  	core.info('PR description already up to date. No changes applied.');
-    }
-  };
-
-  const removeManagedDescriptionBlock = async () => {
-    const currentBody = pr.body || '';
-    if (!currentBody.includes(descriptionMarkerStart) || !currentBody.includes(descriptionMarkerEnd)) {
-  	return;
-    }
-
-    const pattern = new RegExp(
-  	`${descriptionMarkerStart}[\\s\\S]*?${descriptionMarkerEnd}\\s*`,
-  	'm'
-    );
-    const nextBody = currentBody.replace(pattern, '').trimEnd();
-
-    if (nextBody !== currentBody) {
-  	await github.rest.pulls.update({
-  	  owner,
-  	  repo: repoName,
-  	  pull_number: prNumber,
-  	  body: nextBody
-  	});
-  	core.info('Removed managed Playground block from PR description (comment mode active).');
-    }
-  };
-
-  const performCommentUpdate = async () => {
-    const managedBody = `${commentIdentifier}${String.fromCodePoint(10)}${renderedComment.trim()}`;
-    const comments = await github.paginate(github.rest.issues.listComments, {
-  	owner,
-  	repo: repoName,
-  	issue_number: prNumber,
-  	per_page: 100
-    });
-
-    const existing = comments.find((comment) =>
-  	typeof comment.body === 'string' && comment.body.includes(commentIdentifier)
-    );
-
-    if (existing) {
-  	if (existing.body !== managedBody) {
-  	  await github.rest.issues.updateComment({
-  		owner,
-  		repo: repoName,
-  		comment_id: existing.id,
-  		body: managedBody
-  	  });
-  	  core.info(`Updated existing preview comment (id: ${existing.id}).`);
-  	} else {
-  	  core.info('Preview comment already up to date.');
-  	}
-  	return existing.id;
-    }
-
-    const created = await github.rest.issues.createComment({
-  	owner,
-  	repo: repoName,
-  	issue_number: prNumber,
-  	body: managedBody
-    });
-    core.info(`Posted new preview comment (id: ${created.data.id}).`);
-    return created.data.id;
-  };
 
   let commentId = '';
   if (mode === 'append-to-description') {
-    await performDescriptionUpdate();
+    await performDescriptionUpdate({
+      github,
+      owner,
+      repoName,
+      prNumber,
+      currentBody: pr.body || '',
+      renderedDescription,
+      restoreButtonIfRemoved,
+    });
   } else {
-    await removeManagedDescriptionBlock();
-    commentId = String(await performCommentUpdate() || '');
+    await removeManagedDescriptionBlock({ github, owner, repoName, prNumber, currentBody: pr.body || '' });
+    commentId = String(
+      (await performCommentUpdate({ github, owner, repoName, prNumber, commentIdentifier, renderedComment })) || '',
+    );
   }
 
   core.setOutput('mode', mode);
