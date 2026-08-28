@@ -1,5 +1,6 @@
 const core = require('@actions/core');
 const githubLib = require('@actions/github');
+const { mergeVariables, substitute } = require('./templates');
 
 (async () => {
   const context = githubLib.context;
@@ -184,39 +185,6 @@ const githubLib = require('@actions/github');
     }
   }
 
-  const mergeVariables = (...maps) => maps.reduce((acc, map) => {
-    Object.entries(map || {}).forEach(([key, value]) => {
-  	if (value === undefined || value === null) {
-  	  return;
-  	}
-  	acc[String(key).toUpperCase()] = typeof value === 'string' ? value : JSON.stringify(value);
-    });
-    return acc;
-  }, {});
-
-  const substitute = (template, values) => {
-    if (!template) {
-  	return '';
-    }
-    return template.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/gi, (match, key) => {
-  	const upperKey = key.toUpperCase();
-  	let value = Object.prototype.hasOwnProperty.call(values, upperKey)
-  	  ? values[upperKey]
-  	  : '';
-
-  	// Escape HTML entities somewhat naively to prevent the values leaking
-  	// into HTML syntax elements.
-	  if (upperKey !== 'PLAYGROUND_BUTTON') {
-  	  value = value
-  		.replace(/&/g, '&amp;')
-  		.replace(/</g, '&lt;')
-  		.replace(/>/g, '&gt;')
-  		.replace(/"/g, '&quot;')
-  		.replace(/'/g, '&#039;');
-  	}
-  	return value;
-    });
-  };
 
   const blueprintDataUrl = blueprintJson
     ? `data:application/json,${encodeURIComponent(blueprintJson)}`
