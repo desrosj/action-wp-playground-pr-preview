@@ -367,3 +367,66 @@ describe('append-to-description mode', () => {
     expect(core.setFailed).not.toHaveBeenCalled();
   });
 });
+
+describe('blueprint construction', () => {
+  it('passes a custom blueprint input through unchanged', async () => {
+    const customBlueprint = JSON.stringify({ steps: [{ step: 'login', username: 'admin' }] });
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'comment',
+      blueprint: customBlueprint,
+    });
+
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/42/comments', method: 'GET' })
+      .reply(200, []);
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/42/comments', method: 'POST' })
+      .reply(201, fixtures.comment({ id: 1, body: 'placeholder' }));
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith('blueprint-json', customBlueprint);
+  });
+
+  it('uses a custom blueprint-url directly instead of building a data: URL', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'comment',
+      'blueprint-url': 'https://example.com/my-blueprint.json',
+    });
+
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/42/comments', method: 'GET' })
+      .reply(200, []);
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/42/comments', method: 'POST' })
+      .reply(201, fixtures.comment({ id: 1, body: 'placeholder' }));
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith('blueprint-json', '');
+    expect(core.setOutput).toHaveBeenCalledWith(
+      'preview-url',
+      `https://playground.wordpress.net?blueprint-url=${encodeURIComponent('https://example.com/my-blueprint.json')}`,
+    );
+  });
+
+  it('fails with a clear error when the custom blueprint is not valid JSON', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'comment',
+      blueprint: '{not valid json',
+    });
+    // No interceptors registered — validation must fail before any API call.
+
+    await harness.runAction();
+
+    expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('Blueprint is not valid JSON'));
+  });
+});
