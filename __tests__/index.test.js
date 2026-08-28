@@ -430,3 +430,69 @@ describe('blueprint construction', () => {
     expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('Blueprint is not valid JSON'));
   });
 });
+
+describe('pr-number input', () => {
+  it('fetches PR details from the API when pr-number is provided', async () => {
+    harness.setEventPayload({ repository: BASE_REPOSITORY }); // no pull_request in the payload
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'comment',
+      'plugin-path': 'my-plugin',
+      'pr-number': '99',
+    });
+
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/pulls/99', method: 'GET' })
+      .reply(
+        200,
+        fixtures.pullRequest({
+          number: 99,
+          title: 'Fetched via API',
+          headRef: 'fetched-branch',
+          headSha: 'deadbeef',
+          baseRef: 'main',
+        }),
+      );
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/99/comments', method: 'GET' })
+      .reply(200, []);
+    let createdBody;
+    githubApi
+      .intercept({
+        path: '/repos/acme/my-plugin/issues/99/comments',
+        method: 'POST',
+        body: (body) => {
+          createdBody = JSON.parse(body);
+          return true;
+        },
+      })
+      .reply(201, fixtures.comment({ id: 1, body: 'placeholder' }));
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(createdBody).toBeDefined();
+    expect(core.setOutput).toHaveBeenCalledWith(
+      'blueprint-json',
+      expect.stringContaining('"ref":"fetched-branch"'),
+    );
+  });
+
+  it('fails with a clear error when the pr-number fetch fails', async () => {
+    harness.setEventPayload({ repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'comment',
+      'plugin-path': 'my-plugin',
+      'pr-number': '404',
+    });
+
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/pulls/404', method: 'GET' })
+      .reply(404, { message: 'Not Found' });
+
+    await harness.runAction();
+
+    expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch PR #404'));
+  });
+});
