@@ -51,6 +51,31 @@ describe('performDescriptionUpdate', () => {
     await performDescriptionUpdate({ github, ...base, currentBody });
     expect(github.rest.pulls.update).not.toHaveBeenCalled();
   });
+
+  it('does nothing when both markers are present but out of order, so the block regex cannot match', async () => {
+    const github = fakeGithub();
+    // Both markers are present (satisfying the `.includes()` check on both),
+    // but END comes before START, so the non-greedy START...END regex has
+    // nothing to match — this exercises the `if (match) {}` false branch,
+    // after which .replace() is also a no-op and nextBody === currentBody.
+    const currentBody = `${DESCRIPTION_MARKER_END}\n${DESCRIPTION_MARKER_START}`;
+    await performDescriptionUpdate({ github, ...base, currentBody });
+    expect(github.rest.pulls.update).not.toHaveBeenCalled();
+  });
+
+  it('appends the managed block after existing content when markers are absent', async () => {
+    const github = fakeGithub();
+    // Distinct from the "description is empty" case above: a non-empty
+    // currentBody exercises the truthy branch of the
+    // `nextBody = trimmed ? ... : managedBlock` ternary.
+    const currentBody = 'Some existing PR description.';
+    await performDescriptionUpdate({ github, ...base, currentBody });
+    expect(github.rest.pulls.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: `Some existing PR description.\n\n${DESCRIPTION_MARKER_START}\n${BUTTON_HTML}\n${DESCRIPTION_MARKER_END}`,
+      }),
+    );
+  });
 });
 
 describe('removeManagedDescriptionBlock', () => {
@@ -65,6 +90,18 @@ describe('removeManagedDescriptionBlock', () => {
   it('does nothing when markers are absent', async () => {
     const github = fakeGithub();
     await removeManagedDescriptionBlock({ github, owner: 'acme', repoName: 'repo', prNumber: 1, currentBody: 'plain text' });
+    expect(github.rest.pulls.update).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when both markers are present but out of order, so there is nothing to strip', async () => {
+    const github = fakeGithub();
+    // Both markers are present (passing the early `.includes()` guard), but
+    // END comes before START and there's no trailing whitespace, so the
+    // strip regex can't match, .replace() is a no-op, and .trimEnd() leaves
+    // the string unchanged — nextBody === currentBody, exercising that
+    // branch's false path.
+    const currentBody = `${DESCRIPTION_MARKER_END}${DESCRIPTION_MARKER_START}`;
+    await removeManagedDescriptionBlock({ github, owner: 'acme', repoName: 'repo', prNumber: 1, currentBody });
     expect(github.rest.pulls.update).not.toHaveBeenCalled();
   });
 });

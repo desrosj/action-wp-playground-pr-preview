@@ -84,6 +84,16 @@ describe('buildAutoBlueprint', () => {
     expect(blueprint.steps).toEqual([]);
   });
 
+  it('falls back to "/" when pluginPath or themePath normalizes to the repo root', () => {
+    // normalizePath('/') strips both slashes down to '', so `path:
+    // normalizePath(pluginPath) || '/'` must fall through to the '/'
+    // default — exercising that branch for both installPlugin and
+    // installTheme steps.
+    const blueprint = JSON.parse(buildAutoBlueprint({ ...base, pluginPath: '/', themePath: '/' }));
+    expect(blueprint.steps[0].pluginData.path).toBe('/');
+    expect(blueprint.steps[1].themeData.path).toBe('/');
+  });
+
   it('always includes the fixed preferredVersions and $schema', () => {
     const blueprint = JSON.parse(buildAutoBlueprint({ ...base, pluginPath: 'p', themePath: '' }));
     expect(blueprint.$schema).toBe('https://playground.wordpress.net/blueprint-schema.json');

@@ -12,6 +12,13 @@ describe('mergeVariables', () => {
     const result = mergeVariables({ list: [1, 2] });
     expect(result).toEqual({ LIST: '[1,2]' });
   });
+
+  it('tolerates a falsy map in the list, treating it as empty', () => {
+    // `Object.entries(map || {})` — exercises the `|| {}` fallback branch
+    // for a null/undefined entry in the middle of the argument list.
+    const result = mergeVariables({ a: '1' }, null, undefined, { b: '2' });
+    expect(result).toEqual({ A: '1', B: '2' });
+  });
 });
 
 describe('substitute', () => {

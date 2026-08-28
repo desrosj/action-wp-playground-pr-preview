@@ -517,6 +517,68 @@ describe('pr-number input', () => {
 
     expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch PR #404'));
   });
+
+  it('derives owner/repo from the fetched PR when the event payload has no repository', async () => {
+    // No `repository` key at all in the event payload, so the `repo`
+    // variable is falsy going into the pr-number fetch below — this
+    // exercises the `if (!repo) { repo = prData.base.repo; }` fallback in
+    // src/index.js, which only fires once for a payload missing both
+    // pull_request and repository. GITHUB_REPOSITORY must be set because
+    // @actions/github's `context.repo` getter (used to resolve the owner
+    // and repo name to fetch) throws when neither the payload nor this env
+    // var is present.
+    process.env.GITHUB_REPOSITORY = 'acme/my-plugin';
+    harness.setEventPayload({});
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'comment',
+      'plugin-path': 'my-plugin',
+      'pr-number': '99',
+    });
+
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/pulls/99', method: 'GET' })
+      .reply(
+        200,
+        fixtures.pullRequest({
+          number: 99,
+          title: 'Fetched via API',
+          headRef: 'fetched-branch',
+          headSha: 'deadbeef',
+          baseRef: 'main',
+        }),
+      );
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/99/comments', method: 'GET' })
+      .reply(200, []);
+    let createdBody;
+    githubApi
+      .intercept({
+        path: '/repos/acme/my-plugin/issues/99/comments',
+        method: 'POST',
+        body: (body) => {
+          createdBody = JSON.parse(body);
+          return true;
+        },
+      })
+      .reply(201, fixtures.comment({ id: 1, body: 'placeholder' }));
+
+    await harness.runAction();
+
+    // The mocked GitHub API calls above are all scoped to the
+    // acme/my-plugin repo path — if `repo = prData.base.repo` hadn't run,
+    // owner/repoName would have come from context.repo (also acme/my-plugin
+    // here) or been undefined, and these interceptors either wouldn't match
+    // (runAction() would time out) or the comment identifier below
+    // wouldn't be found in the created comment body.
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(createdBody).toBeDefined();
+    expect(createdBody.body).toContain('<!-- wp-playground-preview-comment -->');
+    expect(core.setOutput).toHaveBeenCalledWith(
+      'blueprint-json',
+      expect.stringContaining('"ref":"fetched-branch"'),
+    );
+  });
 });
 
 describe('input validation', () => {
@@ -556,5 +618,18 @@ describe('input validation', () => {
     await harness.runAction();
 
     expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('github-token'));
+  });
+
+  it('fails when there is no pull_request payload and no pr-number input', async () => {
+    harness.setEventPayload({ repository: BASE_REPOSITORY });
+    harness.setInputs({ 'github-token': 'test-token', mode: 'comment', 'plugin-path': 'my-plugin' });
+
+    await harness.runAction();
+
+    expect(core.setFailed).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'This workflow must run on a pull_request event payload, or pr-number must be provided as input.',
+      ),
+    );
   });
 });
