@@ -328,4 +328,42 @@ describe('append-to-description mode', () => {
 
     expect(core.setFailed).not.toHaveBeenCalled();
   });
+
+  it('skips updating when a user placeholder is detected between the markers', async () => {
+    const prWithPlaceholder = {
+      ...BASE_PULL_REQUEST,
+      body:
+        '<!-- wp-playground-preview:start -->\n' +
+        'See our internal wiki for preview instructions instead.\n' +
+        '<!-- wp-playground-preview:end -->',
+    };
+    harness.setEventPayload({ pull_request: prWithPlaceholder, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'append-to-description',
+      'plugin-path': 'my-plugin',
+      'restore-button-if-removed': 'true',
+    });
+    // No PATCH interceptor registered — a real call attempt fails loudly.
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+  });
+
+  it('skips restoring the button when restore-button-if-removed is false', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'append-to-description',
+      'plugin-path': 'my-plugin',
+      'restore-button-if-removed': 'false',
+    });
+    // BASE_PULL_REQUEST.body has no markers, and restoring is disabled —
+    // no PATCH interceptor registered — a real call attempt fails loudly.
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+  });
 });
