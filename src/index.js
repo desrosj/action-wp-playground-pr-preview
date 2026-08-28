@@ -1,6 +1,7 @@
 const core = require('@actions/core');
 const githubLib = require('@actions/github');
 const { mergeVariables, substitute } = require('./templates');
+const { normalizePath, sanitizeSlug, inferSlug, buildAutoBlueprint } = require('./blueprint');
 
 (async () => {
   const context = githubLib.context;
@@ -95,85 +96,16 @@ const { mergeVariables, substitute } = require('./templates');
   const repoArchiveRoot = `${repoName}-${archiveBranchSegment}`;
   const repoGitUrl = `https://github.com/${repoFullName}.git`;
 
-  const normalizePath = (path) => {
-    const raw = (path || '').trim();
-    if (!raw || raw === '.' || raw === './') {
-  	return '';
-    }
-    return raw.replace(/^\.\/+/, '').replace(/^\/+|\/+$/g, '');
-  };
-  const sanitizeSlug = (value, fallback) => {
-    if (!value) return fallback;
-    const cleaned = value
-  	.toLowerCase()
-  	.replace(/[^a-z0-9-]+/g, '-')
-  	.replace(/^-+|-+$/g, '');
-    return cleaned || fallback;
-  };
   const repoSlug = sanitizeSlug(repoName, 'project');
-  const inferSlug = (path, fallback) => {
-    const clean = normalizePath(path).split('/').filter(Boolean).pop();
-    if (!clean || clean === '.' || clean === '..') return fallback;
-    return sanitizeSlug(clean, fallback);
-  };
 
   const pluginSlug = pluginPath ? inferSlug(pluginPath, repoSlug) : '';
   const themeSlug = themePath ? inferSlug(themePath, `${repoSlug}-theme`) : '';
-
-  const buildAutoBlueprint = () => {
-    const steps = [];
-
-    if (pluginPath) {
-  	steps.push(
-  	  {
-  		step: 'installPlugin',
-  		pluginData: {
-  		  resource: 'git:directory',
-  		  url: repoGitUrl,
-  		  ref: headRef,
-  		  path: normalizePath(pluginPath) || "/"
-  		},
-  		options: {
-  		  activate: true
-  		}
-  	  }
-  	);
-    }
-
-    if (themePath) {
-  	steps.push(
-  	  {
-  		step: 'installTheme',
-  		themeData: {
-  		  resource: 'git:directory',
-  		  url: repoGitUrl,
-  		  ref: headRef,
-  		  path: normalizePath(themePath) || "/"
-  		},
-  		options: {
-  		  activate: true
-  		}
-  	  }
-  	);
-    }
-
-    return JSON.stringify(
-  	{
-  	  $schema: 'https://playground.wordpress.net/blueprint-schema.json',
-  	  preferredVersions: {
-  		php: '8.2',
-  		wp: 'latest'
-  	  },
-  	  steps
-  	}
-    );
-  };
 
   let blueprintJson = '';
   if (blueprintInput && blueprintInput.trim().length) {
     blueprintJson = blueprintInput.trim();
   } else if (pluginPath || themePath) {
-    blueprintJson = buildAutoBlueprint();
+    blueprintJson = buildAutoBlueprint({ pluginPath, themePath, repoGitUrl, headRef });
   }
 
   if (blueprintJson) {
