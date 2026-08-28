@@ -366,6 +366,28 @@ describe('append-to-description mode', () => {
 
     expect(core.setFailed).not.toHaveBeenCalled();
   });
+
+  it('HTML-escapes interpolated values in a custom template, except the button itself', async () => {
+    const prWithSpecialTitle = { ...BASE_PULL_REQUEST, title: `<script>alert('x')</script> & "quotes"` };
+    harness.setEventPayload({ pull_request: prWithSpecialTitle, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'append-to-description',
+      'plugin-path': 'my-plugin',
+      'restore-button-if-removed': 'true',
+      'description-template': 'Preview for: {{PR_TITLE}}\n\n{{PLAYGROUND_BUTTON}}',
+    });
+
+    githubApi.intercept({ path: '/repos/acme/my-plugin/pulls/42', method: 'PATCH' }).reply(200, {});
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith(
+      'rendered-description',
+      expect.stringContaining('&lt;script&gt;alert(&#039;x&#039;)&lt;/script&gt; &amp; &quot;quotes&quot;'),
+    );
+  });
 });
 
 describe('blueprint construction', () => {
@@ -494,5 +516,45 @@ describe('pr-number input', () => {
     await harness.runAction();
 
     expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('Failed to fetch PR #404'));
+  });
+});
+
+describe('input validation', () => {
+  it('fails when mode is missing', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({ 'github-token': 'test-token', 'plugin-path': 'my-plugin' });
+
+    await harness.runAction();
+
+    expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('Invalid preview mode'));
+  });
+
+  it('fails when mode is invalid', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({ 'github-token': 'test-token', mode: 'carrier-pigeon', 'plugin-path': 'my-plugin' });
+
+    await harness.runAction();
+
+    expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('Invalid preview mode'));
+  });
+
+  it('fails when none of plugin-path/theme-path/blueprint/blueprint-url is provided', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({ 'github-token': 'test-token', mode: 'comment' });
+
+    await harness.runAction();
+
+    expect(core.setFailed).toHaveBeenCalledWith(
+      expect.stringContaining('One of `plugin-path`, `theme-path`, `blueprint`, or `blueprint-url` inputs is required'),
+    );
+  });
+
+  it('fails when github-token is missing', async () => {
+    harness.setEventPayload({ pull_request: BASE_PULL_REQUEST, repository: BASE_REPOSITORY });
+    harness.setInputs({ mode: 'comment', 'plugin-path': 'my-plugin' });
+
+    await harness.runAction();
+
+    expect(core.setFailed).toHaveBeenCalledWith(expect.stringContaining('github-token'));
   });
 });
