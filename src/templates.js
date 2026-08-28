@@ -21,6 +21,7 @@ function substitute(template, values) {
     let value = Object.prototype.hasOwnProperty.call(values, upperKey) ? values[upperKey] : '';
 
     if (upperKey !== 'PLAYGROUND_BUTTON') {
+      // Escape HTML entities somewhat naively to prevent the values leaking into HTML syntax elements.
       value = value
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')

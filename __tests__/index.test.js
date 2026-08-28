@@ -177,6 +177,7 @@ describe('comment mode', () => {
     await harness.runAction();
 
     expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith('mode', 'comment');
   });
 
   it('removes the managed description block when switching to comment mode', async () => {
@@ -327,6 +328,7 @@ describe('append-to-description mode', () => {
     await harness.runAction();
 
     expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith('mode', 'append-to-description');
   });
 
   it('skips updating when a user placeholder is detected between the markers', async () => {
@@ -349,6 +351,7 @@ describe('append-to-description mode', () => {
     await harness.runAction();
 
     expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith('mode', 'append-to-description');
   });
 
   it('skips restoring the button when restore-button-if-removed is false', async () => {
@@ -365,6 +368,7 @@ describe('append-to-description mode', () => {
     await harness.runAction();
 
     expect(core.setFailed).not.toHaveBeenCalled();
+    expect(core.setOutput).toHaveBeenCalledWith('mode', 'append-to-description');
   });
 
   it('HTML-escapes interpolated values in a custom template, except the button itself', async () => {
@@ -630,6 +634,45 @@ describe('input validation', () => {
       expect.stringContaining(
         'This workflow must run on a pull_request event payload, or pr-number must be provided as input.',
       ),
+    );
+  });
+});
+
+describe('fork pull requests', () => {
+  it('characterizes current behavior: the blueprint always clones the base repo, not the fork', async () => {
+    const forkPullRequest = {
+      ...BASE_PULL_REQUEST,
+      head: {
+        ref: 'feature-branch',
+        sha: 'abc123',
+        repo: { full_name: 'someone-else/my-plugin-fork', owner: { login: 'someone-else' } },
+      },
+    };
+    harness.setEventPayload({ pull_request: forkPullRequest, repository: BASE_REPOSITORY });
+    harness.setInputs({
+      'github-token': 'test-token',
+      mode: 'comment',
+      'plugin-path': 'my-plugin',
+    });
+
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/42/comments', method: 'GET' })
+      .reply(200, []);
+    githubApi
+      .intercept({ path: '/repos/acme/my-plugin/issues/42/comments', method: 'POST' })
+      .reply(201, fixtures.comment({ id: 1, body: 'placeholder' }));
+
+    await harness.runAction();
+
+    expect(core.setFailed).not.toHaveBeenCalled();
+    // Current behavior: repoGitUrl is always built from context.payload.repository
+    // (the base repo), never from pull_request.head.repo — so a fork PR's blueprint
+    // clones the wrong repository. This test documents current behavior; it does
+    // NOT assert correctness. If this is ever fixed to be fork-aware, update this
+    // test deliberately as part of that fix, not by accident.
+    expect(core.setOutput).toHaveBeenCalledWith(
+      'blueprint-json',
+      expect.stringContaining('"url":"https://github.com/acme/my-plugin.git"'),
     );
   });
 });

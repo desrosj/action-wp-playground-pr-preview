@@ -8,6 +8,9 @@ __tests__/runner/*
 # Dependencies
 node_modules/
 
+# Test coverage output
+coverage/
+
 # IDE files
 .idea
 .vscode

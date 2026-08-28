@@ -1,7 +1,7 @@
 const core = require('@actions/core');
 const githubLib = require('@actions/github');
 const { mergeVariables, substitute } = require('./templates');
-const { normalizePath, sanitizeSlug, inferSlug, buildAutoBlueprint } = require('./blueprint');
+const { sanitizeSlug, inferSlug, buildAutoBlueprint } = require('./blueprint');
 const { performDescriptionUpdate, removeManagedDescriptionBlock } = require('./description');
 const { performCommentUpdate } = require('./comment');
 
@@ -81,17 +81,6 @@ const { performCommentUpdate } = require('./comment');
   const commentIdentifier = '<!-- wp-playground-preview-comment -->';
   const restoreButtonIfRemoved = core.getInput('restore-button-if-removed', {required: false}) !== 'false';
 
-  const safeParseJson = (label, value, fallback = {}) => {
-    if (!value || !value.trim()) {
-  	return fallback;
-    }
-    try {
-  	return JSON.parse(value);
-    } catch (error) {
-  	throw new Error(`Unable to parse ${label} as JSON. ${error.message}`);
-    }
-  };
-
   const archiveBranchSegment = headRef.replace(/[^0-9A-Za-z]/g, '-');
   const repoArchiveRoot = `${repoName}-${archiveBranchSegment}`;
   const repoGitUrl = `https://github.com/${repoFullName}.git`;
@@ -116,7 +105,6 @@ const { performCommentUpdate } = require('./comment');
       throw new Error(`Blueprint is not valid JSON. ${error.message}`);
     }
   }
-
 
   const blueprintDataUrl = blueprintJson
     ? `data:application/json,${encodeURIComponent(blueprintJson)}`
@@ -189,7 +177,6 @@ const { performCommentUpdate } = require('./comment');
   const renderedDescription = substitute(descriptionTemplate, templateVariables);
   const renderedComment = substitute(commentTemplate, templateVariables);
 
-
   let commentId = '';
   if (mode === 'append-to-description') {
     await performDescriptionUpdate({
@@ -200,11 +187,20 @@ const { performCommentUpdate } = require('./comment');
       currentBody: pr.body || '',
       renderedDescription,
       restoreButtonIfRemoved,
+      log: core.info,
     });
   } else {
-    await removeManagedDescriptionBlock({ github, owner, repoName, prNumber, currentBody: pr.body || '' });
+    await removeManagedDescriptionBlock({ github, owner, repoName, prNumber, currentBody: pr.body || '', log: core.info });
     commentId = String(
-      (await performCommentUpdate({ github, owner, repoName, prNumber, commentIdentifier, renderedComment })) || '',
+      (await performCommentUpdate({
+        github,
+        owner,
+        repoName,
+        prNumber,
+        commentIdentifier,
+        renderedComment,
+        log: core.info,
+      })) || '',
     );
   }
 

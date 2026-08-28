@@ -9,7 +9,7 @@
   "scripts": {
     "build": "ncc build src/index.js -o dist",
     "test": "npm run test:unit && npm run test:workflows",
-    "test:unit": "jest",
+    "test:unit": "jest --coverage",
     "test:workflows": "node scripts/test-preview-workflows.mjs"
   },
   "dependencies": {

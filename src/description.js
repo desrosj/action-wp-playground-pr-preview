@@ -11,6 +11,7 @@ async function performDescriptionUpdate({
   currentBody,
   renderedDescription,
   restoreButtonIfRemoved,
+  log = () => {},
 }) {
   const managedBlock = `${DESCRIPTION_MARKER_START}\n${renderedDescription.trim()}\n${DESCRIPTION_MARKER_END}`;
   let nextBody;
@@ -22,12 +23,14 @@ async function performDescriptionUpdate({
       const existingContent = match[1].trim();
       const looksLikeButton = existingContent.includes('<a ') && existingContent.includes('playground');
       if (existingContent && !looksLikeButton) {
+        log('User placeholder detected between markers. Skipping update to respect user preference.');
         return;
       }
     }
     nextBody = currentBody.replace(pattern, managedBlock);
   } else {
     if (!restoreButtonIfRemoved) {
+      log('Button markers not found and restore-button-if-removed is false. Skipping to respect user removal.');
       return;
     }
     const trimmed = currentBody.trimEnd();
@@ -36,10 +39,13 @@ async function performDescriptionUpdate({
 
   if (nextBody !== currentBody) {
     await github.rest.pulls.update({ owner, repo: repoName, pull_number: prNumber, body: nextBody });
+    log('PR description updated with Playground preview button.');
+  } else {
+    log('PR description already up to date. No changes applied.');
   }
 }
 
-async function removeManagedDescriptionBlock({ github, owner, repoName, prNumber, currentBody }) {
+async function removeManagedDescriptionBlock({ github, owner, repoName, prNumber, currentBody, log = () => {} }) {
   if (!currentBody.includes(DESCRIPTION_MARKER_START) || !currentBody.includes(DESCRIPTION_MARKER_END)) {
     return;
   }
@@ -49,6 +55,7 @@ async function removeManagedDescriptionBlock({ github, owner, repoName, prNumber
 
   if (nextBody !== currentBody) {
     await github.rest.pulls.update({ owner, repo: repoName, pull_number: prNumber, body: nextBody });
+    log('Removed managed Playground block from PR description (comment mode active).');
   }
 }
 
