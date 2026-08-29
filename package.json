@@ -8,6 +8,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "ncc build src/index.js -o dist",
+    "some-script-to-trigger-actions": "npm -v",
     "test": "npm run test:unit && npm run test:workflows",
     "test:unit": "jest --coverage",
     "test:workflows": "node scripts/test-preview-workflows.mjs"
