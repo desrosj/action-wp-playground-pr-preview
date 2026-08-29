@@ -1,5 +1,9 @@
 const core = require('@actions/core');
 const githubLib = require('@actions/github');
+const { mergeVariables, substitute } = require('./templates');
+const { sanitizeSlug, inferSlug, buildAutoBlueprint } = require('./blueprint');
+const { performDescriptionUpdate, removeManagedDescriptionBlock } = require('./description');
+const { performCommentUpdate } = require('./comment');
 
 (async () => {
   const context = githubLib.context;
@@ -74,105 +78,23 @@ const githubLib = require('@actions/github');
 
   const descriptionTemplateInput = core.getInput('description-template', {required: false}) || '';
   const commentTemplateInput = core.getInput('comment-template', {required: false}) || '';
-  const descriptionMarkerStart = '<!-- wp-playground-preview:start -->';
-  const descriptionMarkerEnd = '<!-- wp-playground-preview:end -->';
   const commentIdentifier = '<!-- wp-playground-preview-comment -->';
   const restoreButtonIfRemoved = core.getInput('restore-button-if-removed', {required: false}) !== 'false';
-
-  const safeParseJson = (label, value, fallback = {}) => {
-    if (!value || !value.trim()) {
-  	return fallback;
-    }
-    try {
-  	return JSON.parse(value);
-    } catch (error) {
-  	throw new Error(`Unable to parse ${label} as JSON. ${error.message}`);
-    }
-  };
 
   const archiveBranchSegment = headRef.replace(/[^0-9A-Za-z]/g, '-');
   const repoArchiveRoot = `${repoName}-${archiveBranchSegment}`;
   const repoGitUrl = `https://github.com/${repoFullName}.git`;
 
-  const normalizePath = (path) => {
-    const raw = (path || '').trim();
-    if (!raw || raw === '.' || raw === './') {
-  	return '';
-    }
-    return raw.replace(/^\.\/+/, '').replace(/^\/+|\/+$/g, '');
-  };
-  const sanitizeSlug = (value, fallback) => {
-    if (!value) return fallback;
-    const cleaned = value
-  	.toLowerCase()
-  	.replace(/[^a-z0-9-]+/g, '-')
-  	.replace(/^-+|-+$/g, '');
-    return cleaned || fallback;
-  };
   const repoSlug = sanitizeSlug(repoName, 'project');
-  const inferSlug = (path, fallback) => {
-    const clean = normalizePath(path).split('/').filter(Boolean).pop();
-    if (!clean || clean === '.' || clean === '..') return fallback;
-    return sanitizeSlug(clean, fallback);
-  };
 
   const pluginSlug = pluginPath ? inferSlug(pluginPath, repoSlug) : '';
   const themeSlug = themePath ? inferSlug(themePath, `${repoSlug}-theme`) : '';
-
-  const buildAutoBlueprint = () => {
-    const steps = [];
-
-    if (pluginPath) {
-  	steps.push(
-  	  {
-  		step: 'installPlugin',
-  		pluginData: {
-  		  resource: 'git:directory',
-  		  url: repoGitUrl,
-  		  ref: headRef,
-  		  path: normalizePath(pluginPath) || "/"
-  		},
-  		options: {
-  		  activate: true
-  		}
-  	  }
-  	);
-    }
-
-    if (themePath) {
-  	steps.push(
-  	  {
-  		step: 'installTheme',
-  		themeData: {
-  		  resource: 'git:directory',
-  		  url: repoGitUrl,
-  		  ref: headRef,
-  		  path: normalizePath(themePath) || "/"
-  		},
-  		options: {
-  		  activate: true
-  		}
-  	  }
-  	);
-    }
-
-    return JSON.stringify(
-  	{
-  	  $schema: 'https://playground.wordpress.net/blueprint-schema.json',
-  	  preferredVersions: {
-  		php: '8.2',
-  		wp: 'latest'
-  	  },
-  	  steps
-  	}
-    );
-  };
 
   let blueprintJson = '';
   if (blueprintInput && blueprintInput.trim().length) {
     blueprintJson = blueprintInput.trim();
   } else if (pluginPath || themePath) {
-    blueprintJson = buildAutoBlueprint();
+    blueprintJson = buildAutoBlueprint({ pluginPath, themePath, repoGitUrl, headRef });
   }
 
   if (blueprintJson) {
@@ -183,40 +105,6 @@ const githubLib = require('@actions/github');
       throw new Error(`Blueprint is not valid JSON. ${error.message}`);
     }
   }
-
-  const mergeVariables = (...maps) => maps.reduce((acc, map) => {
-    Object.entries(map || {}).forEach(([key, value]) => {
-  	if (value === undefined || value === null) {
-  	  return;
-  	}
-  	acc[String(key).toUpperCase()] = typeof value === 'string' ? value : JSON.stringify(value);
-    });
-    return acc;
-  }, {});
-
-  const substitute = (template, values) => {
-    if (!template) {
-  	return '';
-    }
-    return template.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/gi, (match, key) => {
-  	const upperKey = key.toUpperCase();
-  	let value = Object.prototype.hasOwnProperty.call(values, upperKey)
-  	  ? values[upperKey]
-  	  : '';
-
-  	// Escape HTML entities somewhat naively to prevent the values leaking
-  	// into HTML syntax elements.
-	  if (upperKey !== 'PLAYGROUND_BUTTON') {
-  	  value = value
-  		.replace(/&/g, '&amp;')
-  		.replace(/</g, '&lt;')
-  		.replace(/>/g, '&gt;')
-  		.replace(/"/g, '&quot;')
-  		.replace(/'/g, '&#039;');
-  	}
-  	return value;
-    });
-  };
 
   const blueprintDataUrl = blueprintJson
     ? `data:application/json,${encodeURIComponent(blueprintJson)}`
@@ -289,120 +177,31 @@ const githubLib = require('@actions/github');
   const renderedDescription = substitute(descriptionTemplate, templateVariables);
   const renderedComment = substitute(commentTemplate, templateVariables);
 
-  const performDescriptionUpdate = async () => {
-    const currentBody = pr.body || '';
-    const managedBlock = `${descriptionMarkerStart}${String.fromCodePoint(10)}${renderedDescription.trim()}${String.fromCodePoint(10)}${descriptionMarkerEnd}`;
-    let nextBody;
-
-    if (currentBody.includes(descriptionMarkerStart) && currentBody.includes(descriptionMarkerEnd)) {
-  	// Markers exist - check if there's a user placeholder
-  	const pattern = new RegExp(
-  	  `${descriptionMarkerStart}([\\s\\S]*?)${descriptionMarkerEnd}`,
-  	  'm'
-  	);
-  	const match = currentBody.match(pattern);
-  	if (match) {
-  	  const existingContent = match[1].trim();
-  	  // If content exists but doesn't contain typical button HTML, assume it's a user placeholder
-  	  const looksLikeButton = existingContent.includes('<a ') && existingContent.includes('playground');
-  	  if (existingContent && !looksLikeButton) {
-  		core.info('User placeholder detected between markers. Skipping update to respect user preference.');
-  		return;
-  	  }
-  	}
-  	// Update existing button
-  	nextBody = currentBody.replace(pattern, managedBlock);
-    } else {
-  	// Markers don't exist - check if we should restore
-  	if (!restoreButtonIfRemoved) {
-  	  core.info('Button markers not found and restore-button-if-removed is false. Skipping to respect user removal.');
-  	  return;
-  	}
-  	// Add the button
-  	const trimmed = currentBody.trimEnd();
-  	nextBody = trimmed ? `${trimmed}${String.fromCodePoint(10)}${String.fromCodePoint(10)}${managedBlock}` : managedBlock;
-    }
-
-    if (nextBody !== currentBody) {
-  	await github.rest.pulls.update({
-  	  owner,
-  	  repo: repoName,
-  	  pull_number: prNumber,
-  	  body: nextBody
-  	});
-  	core.info('PR description updated with Playground preview button.');
-    } else {
-  	core.info('PR description already up to date. No changes applied.');
-    }
-  };
-
-  const removeManagedDescriptionBlock = async () => {
-    const currentBody = pr.body || '';
-    if (!currentBody.includes(descriptionMarkerStart) || !currentBody.includes(descriptionMarkerEnd)) {
-  	return;
-    }
-
-    const pattern = new RegExp(
-  	`${descriptionMarkerStart}[\\s\\S]*?${descriptionMarkerEnd}\\s*`,
-  	'm'
-    );
-    const nextBody = currentBody.replace(pattern, '').trimEnd();
-
-    if (nextBody !== currentBody) {
-  	await github.rest.pulls.update({
-  	  owner,
-  	  repo: repoName,
-  	  pull_number: prNumber,
-  	  body: nextBody
-  	});
-  	core.info('Removed managed Playground block from PR description (comment mode active).');
-    }
-  };
-
-  const performCommentUpdate = async () => {
-    const managedBody = `${commentIdentifier}${String.fromCodePoint(10)}${renderedComment.trim()}`;
-    const comments = await github.paginate(github.rest.issues.listComments, {
-  	owner,
-  	repo: repoName,
-  	issue_number: prNumber,
-  	per_page: 100
-    });
-
-    const existing = comments.find((comment) =>
-  	typeof comment.body === 'string' && comment.body.includes(commentIdentifier)
-    );
-
-    if (existing) {
-  	if (existing.body !== managedBody) {
-  	  await github.rest.issues.updateComment({
-  		owner,
-  		repo: repoName,
-  		comment_id: existing.id,
-  		body: managedBody
-  	  });
-  	  core.info(`Updated existing preview comment (id: ${existing.id}).`);
-  	} else {
-  	  core.info('Preview comment already up to date.');
-  	}
-  	return existing.id;
-    }
-
-    const created = await github.rest.issues.createComment({
-  	owner,
-  	repo: repoName,
-  	issue_number: prNumber,
-  	body: managedBody
-    });
-    core.info(`Posted new preview comment (id: ${created.data.id}).`);
-    return created.data.id;
-  };
-
   let commentId = '';
   if (mode === 'append-to-description') {
-    await performDescriptionUpdate();
+    await performDescriptionUpdate({
+      github,
+      owner,
+      repoName,
+      prNumber,
+      currentBody: pr.body || '',
+      renderedDescription,
+      restoreButtonIfRemoved,
+      log: core.info,
+    });
   } else {
-    await removeManagedDescriptionBlock();
-    commentId = String(await performCommentUpdate() || '');
+    await removeManagedDescriptionBlock({ github, owner, repoName, prNumber, currentBody: pr.body || '', log: core.info });
+    commentId = String(
+      (await performCommentUpdate({
+        github,
+        owner,
+        repoName,
+        prNumber,
+        commentIdentifier,
+        renderedComment,
+        log: core.info,
+      })) || '',
+    );
   }
 
   core.setOutput('mode', mode);
